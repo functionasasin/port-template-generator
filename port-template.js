@@ -16,7 +16,7 @@ function buildUDMPorts(tier) {
   // Top row: ports 1, 3, 5, 7, [gap], 10
   // Bottom row: ports 2, 4, 6, 8, [gap], 9, 11(SFP)
   const assign = {
-    1: 'Mac Mini',
+    1: 'Mac Mini\n<span style="font-size:6.5px;">.100</span>',
     8: 'Backup Internet',
     9: 'Main Internet',
     11: 'SFP Cable\nTo Switch',
@@ -42,9 +42,9 @@ function buildSwitchPorts(groups, switchSize) {
       columns.push({
         type: 'port',
         topPort:      portNum,
-        topDevice:    `${group.prefix}\nC${c1}`,
+        topDevice:    `${group.prefix}\nC${c1}\n<span style="font-size:6.5px;">${group.ipFn(c1)}</span>`,
         bottomPort:   portNum + 1,
-        bottomDevice: c2 <= group.courts ? `${group.prefix}\nC${c2}` : '',
+        bottomDevice: c2 <= group.courts ? `${group.prefix}\nC${c2}\n<span style="font-size:6.5px;">${group.ipFn(c2)}</span>` : '',
         color:        group.color,
       });
       portNum += 2;
@@ -165,9 +165,9 @@ function buildHtml(courts) {
 
   if (config.switches === 1) {
     const cols = buildSwitchPorts([
-      { prefix: 'iPad',          courts, color: COLORS.ipad    },
-      { prefix: 'Replay Cam',    courts, color: COLORS.camera  },
-      { prefix: 'Apple TV',      courts, color: COLORS.appletv },
+      { prefix: 'iPad',       courts, color: COLORS.ipad,    ipFn: c => `.${20 + c}` },
+      { prefix: 'Replay Cam', courts, color: COLORS.camera,  ipFn: c => `.${20 + c}` },
+      { prefix: 'Apple TV',   courts, color: COLORS.appletv, ipFn: c => `.${40 + c}` },
     ], config.size);
     const swHtml = buildSwitchHtml(`${config.size} Port Switch`, cols);
 
@@ -179,11 +179,11 @@ function buildHtml(courts) {
 
   } else {
     const sw1Cols = buildSwitchPorts([
-      { prefix: 'iPad',       courts, color: COLORS.ipad   },
-      { prefix: 'Replay Cam', courts, color: COLORS.camera },
+      { prefix: 'iPad',       courts, color: COLORS.ipad,   ipFn: c => `.${20 + c}` },
+      { prefix: 'Replay Cam', courts, color: COLORS.camera, ipFn: c => `.${20 + c}` },
     ], config.size);
     const sw2Cols = buildSwitchPorts([
-      { prefix: 'Apple TV', courts, color: COLORS.appletv },
+      { prefix: 'Apple TV', courts, color: COLORS.appletv, ipFn: c => `.${40 + c}` },
     ], config.size);
 
     switchesHtml = `
@@ -273,6 +273,25 @@ function buildHtml(courts) {
 </head>
 <body>
   <h1>Port Template — Pro | ${courts} Courts</h1>
+  <div style="display:flex;gap:20px;align-items:center;margin-bottom:12px;font-size:8px;">
+    <div style="display:flex;align-items:center;gap:5px;">
+      <div style="width:14px;height:14px;background:#BDD7EE;border:1px solid #000;flex-shrink:0;"></div>
+      <span>iPad — 192.168.32.(20+N)</span>
+    </div>
+    <div style="display:flex;align-items:center;gap:5px;">
+      <div style="width:14px;height:14px;background:#E2EFDA;border:1px solid #000;flex-shrink:0;"></div>
+      <span>Camera — 192.168.31.(20+N)</span>
+    </div>
+    <div style="display:flex;align-items:center;gap:5px;">
+      <div style="width:14px;height:14px;background:#FCE4D6;border:1px solid #000;flex-shrink:0;"></div>
+      <span>Apple TV — 192.168.32.(40+N)</span>
+    </div>
+    <div style="display:flex;align-items:center;gap:5px;">
+      <div style="width:14px;height:14px;background:#D6DCE4;border:1px solid #000;flex-shrink:0;"></div>
+      <span>Mac Mini — 192.168.32.100</span>
+    </div>
+    <span style="color:#555;">N = court number</span>
+  </div>
   ${switchesHtml}
 </body>
 </html>`;
