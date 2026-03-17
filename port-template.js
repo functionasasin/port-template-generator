@@ -1,5 +1,5 @@
 import { chromium } from 'playwright';
-import { writeFileSync } from 'fs';
+import { writeFileSync, mkdirSync } from 'fs';
 
 // ─── Config ───────────────────────────────────────────────────────────────────
 
@@ -284,6 +284,7 @@ async function main() {
   const htmlFile = `templates/html/port-template-pro-${courts}court.html`;
   const pdfFile  = `templates/port-template-pro-${courts}court.pdf`;
 
+  mkdirSync('templates/html', { recursive: true });
   writeFileSync(htmlFile, html);
 
   const browser = await chromium.launch();

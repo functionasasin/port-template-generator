@@ -31,6 +31,8 @@ node port-template.js pro 18   # 18-court Pro → 2x 48-port switches
 - `templates/port-template-pro-<N>court.pdf` — print this
 - `templates/html/port-template-pro-<N>court.html` — HTML source
 
+The `templates/` and `templates/html/` folders are created automatically if they don't exist.
+
 **Switch sizing (Pro)**
 
 | Courts  | Switches              |
@@ -39,11 +41,3 @@ node port-template.js pro 18   # 18-court Pro → 2x 48-port switches
 | 9–16    | 1x 48-port switch     |
 | 17–18   | 2x 48-port switches   |
 
-
-## Guides
-
-| File | Description |
-|------|-------------|
-| `guides/tutorial.md` | Quick command reference |
-| `guides/network-guide.md` | VLAN setup, IP addressing, DDNS, Mosyle config |
-| `guides/guide-summary.md` | PodPlay ops guide summary |
