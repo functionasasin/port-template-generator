@@ -1,0 +1,8 @@
+node_modules/
+templates/html/
+templates/*.pdf
+.playwright-cli/
+.DS_Store
+.claude/
+guides/
+googlesheets/
