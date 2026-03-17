@@ -29,9 +29,8 @@ node port-template.js pro 18   # 18-court Pro → 2x 48-port switches
 
 **Output**
 - `templates/port-template-pro-<N>court.pdf` — print this
-- `templates/html/port-template-pro-<N>court.html` — HTML source
 
-The `templates/` and `templates/html/` folders are created automatically if they don't exist.
+The `templates/` folder is created automatically if it doesn't exist.
 
 **Switch sizing (Pro)**
 

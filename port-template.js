@@ -1,5 +1,5 @@
 import { chromium } from 'playwright';
-import { writeFileSync, mkdirSync } from 'fs';
+import { mkdirSync } from 'fs';
 
 // ─── Config ───────────────────────────────────────────────────────────────────
 
@@ -51,16 +51,30 @@ function buildSwitchPorts(groups, switchSize) {
     }
   });
 
+  // Fill remaining empty ports up to switchSize
+  while (portNum <= switchSize) {
+    columns.push({
+      type:         'port',
+      topPort:      portNum,
+      topDevice:    '',
+      bottomPort:   portNum + 1,
+      bottomDevice: '',
+      color:        COLORS.empty,
+    });
+    portNum += 2;
+  }
+
   // SFP at fixed port number (switchSize + 1, e.g. port 25 on a 24-port switch)
   const sfpPort = switchSize + 1;
   columns.push({
-    type: 'port',
+    type:         'port',
     topPort:      sfpPort,
     topDevice:    'SFP Cable\nto UDM',
     bottomPort:   sfpPort + 1,
     bottomDevice: '',
     color:        COLORS.sfp,
     gapBefore:    true,
+    isSfp:        true,
   });
 
   return columns;
@@ -122,10 +136,11 @@ function buildUDMHtml(tier) {
 
 function buildSwitchHtml(title, columns) {
   const gapDiv = `<div class="port-gap"></div>`;
-  const topNums  = columns.map(col => col.type === 'gap' ? gapDiv : (col.gapBefore ? gapDiv : '') + portNum(col.topPort)).join('');
+  const sfpLabel = `<div class="port-num">SFP/Uplink</div>`;
+  const topNums  = columns.map(col => col.type === 'gap' ? gapDiv : (col.gapBefore ? gapDiv : '') + (col.isSfp ? sfpLabel : portNum(col.topPort))).join('');
   const topBoxes = columns.map(col => col.type === 'gap' ? gapDiv : (col.gapBefore ? gapDiv : '') + portBox(col.topDevice || '', col.color)).join('');
   const botBoxes = columns.map(col => col.type === 'gap' ? gapDiv : (col.gapBefore ? gapDiv : '') + portBox(col.bottomDevice || '', col.bottomDevice ? col.color : COLORS.empty)).join('');
-  const botNums  = columns.map(col => col.type === 'gap' ? gapDiv : (col.gapBefore ? gapDiv : '') + portNum(col.bottomPort)).join('');
+  const botNums  = columns.map(col => col.type === 'gap' ? gapDiv : (col.gapBefore ? gapDiv : '') + (col.isSfp ? `<div class="port-num-empty"></div>` : portNum(col.bottomPort))).join('');
 
   return `
     <div class="panel wide">
@@ -281,15 +296,13 @@ async function main() {
   }
 
   const html = buildHtml(courts);
-  const htmlFile = `templates/html/port-template-pro-${courts}court.html`;
-  const pdfFile  = `templates/port-template-pro-${courts}court.pdf`;
+  const pdfFile = `templates/port-template-pro-${courts}court.pdf`;
 
-  mkdirSync('templates/html', { recursive: true });
-  writeFileSync(htmlFile, html);
+  mkdirSync('templates', { recursive: true });
 
   const browser = await chromium.launch();
   const page = await browser.newPage();
-  await page.goto(`file://${process.cwd()}/${htmlFile}`);
+  await page.setContent(html, { waitUntil: 'load' });
   await page.pdf({
     path: pdfFile,
     format: 'A3',
