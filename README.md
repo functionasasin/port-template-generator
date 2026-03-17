@@ -1,7 +1,3 @@
-# Port Template Generator
-
-Generates print-ready PDF port assignment templates for PodPlay court installations based on tier and court count.
-
 ## Requirements
 
 - Node.js 18+
