@@ -3,9 +3,9 @@ import { mkdirSync } from 'fs';
 
 // ─── Config ───────────────────────────────────────────────────────────────────
 
-function getSwitchConfig(courts) {
-  if (courts <= 8)  return { switches: 1, size: 24 };
-  if (courts <= 16) return { switches: 1, size: 48 };
+function getSwitchConfig(totalPorts) {
+  if (totalPorts <= 24) return { switches: 1, size: 24 };
+  if (totalPorts <= 48) return { switches: 1, size: 48 };
   return { switches: 2, size: 48 };
 }
 
@@ -83,12 +83,13 @@ function buildSwitchPorts(groups, switchSize) {
 // ─── Device colors ────────────────────────────────────────────────────────────
 
 const COLORS = {
-  ipad:    '#BDD7EE',
-  camera:  '#E2EFDA',
-  appletv: '#FCE4D6',
-  empty:   '#FFFFFF',
-  sfp:     '#D9D9D9',
-  udm:     '#D6DCE4',
+  ipad:        '#BDD7EE',
+  camera:      '#E2EFDA',
+  appletv:     '#FCE4D6',
+  securitycam: '#E2D9F3',
+  empty:       '#FFFFFF',
+  sfp:         '#D9D9D9',
+  udm:         '#D6DCE4',
 };
 
 // ─── HTML builders ────────────────────────────────────────────────────────────
@@ -156,10 +157,15 @@ function buildSwitchHtml(title, columns) {
 
 // ─── Full HTML page ───────────────────────────────────────────────────────────
 
-function buildHtml(courts) {
-  const config = getSwitchConfig(courts);
+function buildHtml(courts, cams) {
+  const totalPorts = courts * 3 + cams;
+  const config = getSwitchConfig(totalPorts);
 
   const udmHtml = buildUDMHtml('pro');
+
+  const camGroup = cams > 0
+    ? [{ prefix: 'UniFi Cam', courts: cams, color: COLORS.securitycam, ipFn: c => `.${10 + c}` }]
+    : [];
 
   let switchesHtml = '';
 
@@ -168,6 +174,7 @@ function buildHtml(courts) {
       { prefix: 'iPad',       courts, color: COLORS.ipad,    ipFn: c => `.${20 + c}` },
       { prefix: 'Replay Cam', courts, color: COLORS.camera,  ipFn: c => `.${20 + c}` },
       { prefix: 'Apple TV',   courts, color: COLORS.appletv, ipFn: c => `.${40 + c}` },
+      ...camGroup,
     ], config.size);
     const swHtml = buildSwitchHtml(`${config.size} Port Switch`, cols);
 
@@ -184,6 +191,7 @@ function buildHtml(courts) {
     ], config.size);
     const sw2Cols = buildSwitchPorts([
       { prefix: 'Apple TV', courts, color: COLORS.appletv, ipFn: c => `.${40 + c}` },
+      ...camGroup,
     ], config.size);
 
     switchesHtml = `
@@ -192,9 +200,15 @@ function buildHtml(courts) {
         ${buildSwitchHtml('Switch 1 (48-port) — iPads + Cameras', sw1Cols)}
       </div>
       <div class="row" style="margin-top:24px;">
-        ${buildSwitchHtml('Switch 2 (48-port) — Apple TVs', sw2Cols)}
+        ${buildSwitchHtml(`Switch 2 (48-port) — Apple TVs${cams > 0 ? ' + Security Cams' : ''}`, sw2Cols)}
       </div>`;
   }
+
+  const camLegend = cams > 0 ? `
+    <div style="display:flex;align-items:center;gap:5px;">
+      <div style="width:14px;height:14px;background:#E2D9F3;border:1px solid #000;flex-shrink:0;"></div>
+      <span>UniFi Cam — 192.168.33.(10+N)</span>
+    </div>` : '';
 
   return `<!DOCTYPE html>
 <html>
@@ -272,7 +286,7 @@ function buildHtml(courts) {
 </style>
 </head>
 <body>
-  <h1>Port Template — Pro | ${courts} Courts</h1>
+  <h1>Port Template — Pro | ${courts} Courts${cams > 0 ? ` | ${cams} Security Cams` : ''}</h1>
   <div style="display:flex;gap:20px;align-items:center;margin-bottom:12px;font-size:8px;">
     <div style="display:flex;align-items:center;gap:5px;">
       <div style="width:14px;height:14px;background:#BDD7EE;border:1px solid #000;flex-shrink:0;"></div>
@@ -290,7 +304,8 @@ function buildHtml(courts) {
       <div style="width:14px;height:14px;background:#D6DCE4;border:1px solid #000;flex-shrink:0;"></div>
       <span>Mac Mini — 192.168.32.100</span>
     </div>
-    <span style="color:#555;">N = court number</span>
+    ${camLegend}
+    <span style="color:#555;">N = court/cam number</span>
   </div>
   ${switchesHtml}
 </body>
@@ -300,11 +315,13 @@ function buildHtml(courts) {
 // ─── Main ─────────────────────────────────────────────────────────────────────
 
 async function main() {
-  const [tier, courtsArg] = process.argv.slice(2);
+  const args = process.argv.slice(2);
+  const [tier, courtsArg] = args;
 
   if (!tier || !courtsArg) {
-    console.error('Usage: node port-template.js <tier> <courts>');
+    console.error('Usage: node port-template.js <tier> <courts> [--cams N]');
     console.error('Example: node port-template.js pro 8');
+    console.error('Example: node port-template.js pro 8 --cams 4');
     process.exit(1);
   }
 
@@ -314,8 +331,19 @@ async function main() {
     process.exit(1);
   }
 
-  const html = buildHtml(courts);
-  const pdfFile = `templates/port-template-pro-${courts}court.pdf`;
+  const camsIdx = args.indexOf('--cams');
+  let cams = 0;
+  if (camsIdx !== -1) {
+    cams = parseInt(args[camsIdx + 1]);
+    if (isNaN(cams) || cams < 0) {
+      console.error('--cams must be a non-negative integer.');
+      process.exit(1);
+    }
+  }
+
+  const html = buildHtml(courts, cams);
+  const camsSuffix = cams > 0 ? `-${cams}cams` : '';
+  const pdfFile = `templates/port-template-pro-${courts}court${camsSuffix}.pdf`;
 
   mkdirSync('templates', { recursive: true });
 
