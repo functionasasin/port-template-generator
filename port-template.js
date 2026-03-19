@@ -11,7 +11,7 @@ function getSwitchConfig(totalPorts) {
 
 // ─── Port assignment builders ─────────────────────────────────────────────────
 
-function buildUDMPorts(tier) {
+function buildUDMPorts(isAuto) {
   // Physical UDM-SE layout: 8 LAN ports in 2 rows, then WAN + SFP
   // Top row: ports 1, 3, 5, 7, [gap], 10
   // Bottom row: ports 2, 4, 6, 8, [gap], 9, 11(SFP)
@@ -21,10 +21,18 @@ function buildUDMPorts(tier) {
     9: 'Main Internet',
     11: 'SFP Cable\nTo Switch',
   };
+  const colors = {};
+  if (isAuto) {
+    assign[2] = 'Kisi\nController';
+    assign[4] = 'Kisi\nReader';
+    colors[2] = COLORS.kisi;
+    colors[4] = COLORS.kisi;
+  }
   return {
     topPorts:    [1, 3, 5, 7, null, 10],
     bottomPorts: [2, 4, 6, 8, null, 9, 11],
     assign,
+    colors,
   };
 }
 
@@ -39,12 +47,15 @@ function buildSwitchPorts(groups, switchSize) {
     for (let p = 0; p < pairs; p++) {
       const c1 = p * 2 + 1;
       const c2 = p * 2 + 2;
+      const labelFn = group.nameFn
+        ? (n) => `${group.nameFn(n)}\n<span style="font-size:6.5px;">${group.ipFn(n)}</span>`
+        : (n) => `${group.prefix}\nC${n}\n<span style="font-size:6.5px;">${group.ipFn(n)}</span>`;
       columns.push({
         type: 'port',
         topPort:      portNum,
-        topDevice:    `${group.prefix}\nC${c1}\n<span style="font-size:6.5px;">${group.ipFn(c1)}</span>`,
+        topDevice:    labelFn(c1),
         bottomPort:   portNum + 1,
-        bottomDevice: c2 <= group.courts ? `${group.prefix}\nC${c2}\n<span style="font-size:6.5px;">${group.ipFn(c2)}</span>` : '',
+        bottomDevice: c2 <= group.courts ? labelFn(c2) : '',
         color:        group.color,
       });
       portNum += 2;
@@ -87,6 +98,7 @@ const COLORS = {
   camera:      '#E2EFDA',
   appletv:     '#FCE4D6',
   securitycam: '#E2D9F3',
+  kisi:        '#FFF2CC',
   empty:       '#FFFFFF',
   sfp:         '#D9D9D9',
   udm:         '#D6DCE4',
@@ -105,19 +117,20 @@ function portNum(num) {
   return `<div class="port-num">Port ${num}</div>`;
 }
 
-function buildUDMHtml(tier) {
-  const { topPorts, bottomPorts, assign } = buildUDMPorts(tier);
+function buildUDMHtml(isAuto) {
+  const { topPorts, bottomPorts, assign, colors } = buildUDMPorts(isAuto);
 
   const topNums  = topPorts.map(p => portNum(p)).join('');
   const topBoxes = topPorts.map(p => {
     if (p === null) return `<div class="port-gap"></div>`;
-    return portBox(assign[p] || '', p ? COLORS.udm : COLORS.empty);
+    const color = colors[p] || (assign[p] ? COLORS.udm : COLORS.empty);
+    return portBox(assign[p] || '', color);
   }).join('');
 
   const botBoxes = bottomPorts.map(p => {
     if (p === null) return `<div class="port-gap"></div>`;
     const isSfp = p === 11;
-    const color = isSfp ? COLORS.sfp : (assign[p] ? COLORS.udm : COLORS.empty);
+    const color = isSfp ? COLORS.sfp : (colors[p] || (assign[p] ? COLORS.udm : COLORS.empty));
     return portBox(assign[p] || '', color);
   }).join('');
 
@@ -157,15 +170,27 @@ function buildSwitchHtml(title, columns) {
 
 // ─── Full HTML page ───────────────────────────────────────────────────────────
 
-function buildHtml(courts, cams) {
-  const totalPorts = courts * 3 + cams;
+const AUTO_TIERS = ['auto', 'autonomous', 'autonomous+'];
+
+function buildHtml(tier, courts, cams, doors) {
+  const isAuto = AUTO_TIERS.includes(tier.toLowerCase());
+
+  // Kisi Controller + Reader #1 are on UDM; remaining readers (doors - 1) go on switch
+  const kisiOnSwitch = isAuto ? Math.max(0, doors - 1) : 0;
+  const totalPorts = courts * 3 + cams + kisiOnSwitch;
   const config = getSwitchConfig(totalPorts);
 
-  const udmHtml = buildUDMHtml('pro');
+  const udmHtml = buildUDMHtml(isAuto);
 
   const camGroup = cams > 0
     ? [{ prefix: 'UniFi Cam', courts: cams, color: COLORS.securitycam, ipFn: c => `.${10 + c}` }]
     : [];
+
+  // Switch only gets readers #1 onward (UDM has the unnumbered one)
+  const kisiGroups = kisiOnSwitch > 0 ? [
+    { prefix: 'Kisi Reader', courts: kisiOnSwitch, color: COLORS.kisi,
+      nameFn: n => `Kisi Reader\n#${n}`, ipFn: c => `.${10 + c + 1}` },
+  ] : [];
 
   let switchesHtml = '';
 
@@ -175,13 +200,13 @@ function buildHtml(courts, cams) {
       { prefix: 'Replay Cam', courts, color: COLORS.camera,  ipFn: c => `.${20 + c}` },
       { prefix: 'Apple TV',   courts, color: COLORS.appletv, ipFn: c => `.${40 + c}` },
       ...camGroup,
+      ...kisiGroups,
     ], config.size);
-    const swHtml = buildSwitchHtml(`${config.size} Port Switch`, cols);
 
     switchesHtml = `
       <div class="row">
         ${udmHtml}
-        ${swHtml}
+        ${buildSwitchHtml(`${config.size} Port Switch`, cols)}
       </div>`;
 
   } else {
@@ -189,9 +214,16 @@ function buildHtml(courts, cams) {
       { prefix: 'iPad',       courts, color: COLORS.ipad,   ipFn: c => `.${20 + c}` },
       { prefix: 'Replay Cam', courts, color: COLORS.camera, ipFn: c => `.${20 + c}` },
     ], config.size);
+
+    const sw2ExtraLabel = [
+      cams > 0 ? 'Security Cams' : null,
+      isAuto    ? 'Kisi'         : null,
+    ].filter(Boolean).join(' + ');
+
     const sw2Cols = buildSwitchPorts([
       { prefix: 'Apple TV', courts, color: COLORS.appletv, ipFn: c => `.${40 + c}` },
       ...camGroup,
+      ...kisiGroups,
     ], config.size);
 
     switchesHtml = `
@@ -200,14 +232,24 @@ function buildHtml(courts, cams) {
         ${buildSwitchHtml('Switch 1 (48-port) — iPads + Cameras', sw1Cols)}
       </div>
       <div class="row" style="margin-top:24px;">
-        ${buildSwitchHtml(`Switch 2 (48-port) — Apple TVs${cams > 0 ? ' + Security Cams' : ''}`, sw2Cols)}
+        ${buildSwitchHtml(`Switch 2 (48-port) — Apple TVs${sw2ExtraLabel ? ` + ${sw2ExtraLabel}` : ''}`, sw2Cols)}
       </div>`;
   }
+
+  const tierLabel = isAuto ? 'Auto' : 'Pro';
+  const doorsLabel = isAuto ? ` | ${doors} Doors` : '';
+  const camsLabel  = cams > 0 ? ` | ${cams} Security Cams` : '';
 
   const camLegend = cams > 0 ? `
     <div style="display:flex;align-items:center;gap:5px;">
       <div style="width:14px;height:14px;background:#E2D9F3;border:1px solid #000;flex-shrink:0;"></div>
       <span>UniFi Cam — 192.168.33.(10+N)</span>
+    </div>` : '';
+
+  const kisiLegend = isAuto ? `
+    <div style="display:flex;align-items:center;gap:5px;">
+      <div style="width:14px;height:14px;background:#FFF2CC;border:1px solid #000;flex-shrink:0;"></div>
+      <span>Kisi — 192.168.34.10+ (Controller .10, Readers .11+)</span>
     </div>` : '';
 
   return `<!DOCTYPE html>
@@ -286,8 +328,8 @@ function buildHtml(courts, cams) {
 </style>
 </head>
 <body>
-  <h1>Port Template — Pro | ${courts} Courts${cams > 0 ? ` | ${cams} Security Cams` : ''}</h1>
-  <div style="display:flex;gap:20px;align-items:center;margin-bottom:12px;font-size:8px;">
+  <h1>Port Template — ${tierLabel} | ${courts} Courts${doorsLabel}${camsLabel}</h1>
+  <div style="display:flex;gap:20px;align-items:center;margin-bottom:12px;font-size:8px;flex-wrap:wrap;">
     <div style="display:flex;align-items:center;gap:5px;">
       <div style="width:14px;height:14px;background:#BDD7EE;border:1px solid #000;flex-shrink:0;"></div>
       <span>iPad — 192.168.32.(20+N)</span>
@@ -305,7 +347,8 @@ function buildHtml(courts, cams) {
       <span>Mac Mini — 192.168.32.100</span>
     </div>
     ${camLegend}
-    <span style="color:#555;">N = court/cam number</span>
+    ${kisiLegend}
+    <span style="color:#555;">N = court/device number</span>
   </div>
   ${switchesHtml}
 </body>
@@ -316,12 +359,23 @@ function buildHtml(courts, cams) {
 
 async function main() {
   const args = process.argv.slice(2);
-  const [tier, courtsArg] = args;
+  const [tierArg, courtsArg] = args;
 
-  if (!tier || !courtsArg) {
-    console.error('Usage: node port-template.js <tier> <courts> [--cams N]');
+  if (!tierArg || !courtsArg) {
+    console.error('Usage: node port-template.js <tier> <courts> [--cams N] [--doors N]');
+    console.error('  Tiers: pro, auto, autonomous, autonomous+');
     console.error('Example: node port-template.js pro 8');
     console.error('Example: node port-template.js pro 8 --cams 4');
+    console.error('Example: node port-template.js auto 8 --doors 3');
+    console.error('Example: node port-template.js autonomous+ 8 --doors 3 --cams 2');
+    process.exit(1);
+  }
+
+  const tier = tierArg.toLowerCase();
+  const isAuto = AUTO_TIERS.includes(tier);
+  const validTiers = ['pro', ...AUTO_TIERS];
+  if (!validTiers.includes(tier)) {
+    console.error(`Invalid tier "${tierArg}". Valid tiers: pro, auto, autonomous, autonomous+`);
     process.exit(1);
   }
 
@@ -341,9 +395,25 @@ async function main() {
     }
   }
 
-  const html = buildHtml(courts, cams);
-  const camsSuffix = cams > 0 ? `-${cams}cams` : '';
-  const pdfFile = `templates/port-template-pro-${courts}court${camsSuffix}.pdf`;
+  const doorsIdx = args.indexOf('--doors');
+  let doors = 0;
+  if (isAuto) {
+    if (doorsIdx === -1) {
+      console.error('--doors N is required for auto/autonomous plans.');
+      process.exit(1);
+    }
+    doors = parseInt(args[doorsIdx + 1]);
+    if (isNaN(doors) || doors < 1) {
+      console.error('--doors must be a positive integer.');
+      process.exit(1);
+    }
+  }
+
+  const html = buildHtml(tier, courts, cams, doors);
+  const tierSlug = isAuto ? 'auto' : 'pro';
+  const camsSuffix  = cams > 0  ? `-${cams}cams`   : '';
+  const doorsSuffix = doors > 0 ? `-${doors}doors`  : '';
+  const pdfFile = `templates/port-template-${tierSlug}-${courts}court${doorsSuffix}${camsSuffix}.pdf`;
 
   mkdirSync('templates', { recursive: true });
 
