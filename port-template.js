@@ -3,9 +3,11 @@ import { mkdirSync } from 'fs';
 
 // ─── Config ───────────────────────────────────────────────────────────────────
 
+const VACANT_PORTS = 3; // always reserve this many ports at the end of each switch
+
 function getSwitchConfig(totalPorts) {
-  if (totalPorts <= 24) return { switches: 1, size: 24 };
-  if (totalPorts <= 48) return { switches: 1, size: 48 };
+  if (totalPorts <= 24 - VACANT_PORTS) return { switches: 1, size: 24 }; // ≤21
+  if (totalPorts <= 48 - VACANT_PORTS) return { switches: 1, size: 48 }; // ≤45
   return { switches: 2, size: 48 };
 }
 
@@ -62,15 +64,20 @@ function buildSwitchPorts(groups, switchSize) {
     }
   });
 
-  // Fill remaining empty ports up to switchSize
+  // Fill remaining ports — last VACANT_PORTS are labeled VACANT, rest are empty
+  const vacantStartPort = switchSize - VACANT_PORTS + 1;
+
   while (portNum <= switchSize) {
+    const isVacant = portNum >= vacantStartPort;
+    const topLabel    = isVacant ? 'VACANT' : '';
+    const bottomLabel = (portNum + 1 <= switchSize && portNum + 1 >= vacantStartPort) ? 'VACANT' : '';
     columns.push({
       type:         'port',
       topPort:      portNum,
-      topDevice:    '',
+      topDevice:    topLabel,
       bottomPort:   portNum + 1,
-      bottomDevice: '',
-      color:        COLORS.empty,
+      bottomDevice: bottomLabel,
+      color:        isVacant ? COLORS.vacant : COLORS.empty,
     });
     portNum += 2;
   }
@@ -99,6 +106,7 @@ const COLORS = {
   appletv:     '#FCE4D6',
   securitycam: '#E2D9F3',
   kisi:        '#FFF2CC',
+  vacant:      '#F2F2F2',
   empty:       '#FFFFFF',
   sfp:         '#D9D9D9',
   udm:         '#D6DCE4',
@@ -345,6 +353,10 @@ function buildHtml(tier, courts, cams, doors) {
     <div style="display:flex;align-items:center;gap:5px;">
       <div style="width:14px;height:14px;background:#D6DCE4;border:1px solid #000;flex-shrink:0;"></div>
       <span>Mac Mini — 192.168.32.100</span>
+    </div>
+    <div style="display:flex;align-items:center;gap:5px;">
+      <div style="width:14px;height:14px;background:#F2F2F2;border:1px solid #000;flex-shrink:0;"></div>
+      <span>Vacant — reserved for expansion / troubleshooting</span>
     </div>
     ${camLegend}
     ${kisiLegend}
