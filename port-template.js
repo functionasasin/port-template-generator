@@ -205,7 +205,7 @@ function buildHtml(tier, courts, cams, doors) {
   if (config.switches === 1) {
     const cols = buildSwitchPorts([
       { prefix: 'iPad',       courts, color: COLORS.ipad,    ipFn: c => `.${20 + c}` },
-      { prefix: 'Replay Cam', courts, color: COLORS.camera,  ipFn: c => `.${20 + c}` },
+      { prefix: 'Replay Cam', courts, color: COLORS.camera,  ipFn: c => `.${30 + c}` },
       { prefix: 'Apple TV',   courts, color: COLORS.appletv, ipFn: c => `.${40 + c}` },
       ...camGroup,
       ...kisiGroups,
@@ -220,7 +220,7 @@ function buildHtml(tier, courts, cams, doors) {
   } else {
     const sw1Cols = buildSwitchPorts([
       { prefix: 'iPad',       courts, color: COLORS.ipad,   ipFn: c => `.${20 + c}` },
-      { prefix: 'Replay Cam', courts, color: COLORS.camera, ipFn: c => `.${20 + c}` },
+      { prefix: 'Replay Cam', courts, color: COLORS.camera, ipFn: c => `.${30 + c}` },
     ], config.size);
 
     const sw2ExtraLabel = [
@@ -340,19 +340,19 @@ function buildHtml(tier, courts, cams, doors) {
   <div style="display:flex;gap:20px;align-items:center;margin-bottom:12px;font-size:8px;flex-wrap:wrap;">
     <div style="display:flex;align-items:center;gap:5px;">
       <div style="width:14px;height:14px;background:#BDD7EE;border:1px solid #000;flex-shrink:0;"></div>
-      <span>iPad — 192.168.32.(20+N)</span>
+      <span>iPad — 192.168.132.(20+N)</span>
     </div>
     <div style="display:flex;align-items:center;gap:5px;">
       <div style="width:14px;height:14px;background:#E2EFDA;border:1px solid #000;flex-shrink:0;"></div>
-      <span>Camera — 192.168.31.(20+N)</span>
+      <span>Camera — 192.168.132.(30+N)</span>
     </div>
     <div style="display:flex;align-items:center;gap:5px;">
       <div style="width:14px;height:14px;background:#FCE4D6;border:1px solid #000;flex-shrink:0;"></div>
-      <span>Apple TV — 192.168.32.(40+N)</span>
+      <span>Apple TV — 192.168.132.(40+N)</span>
     </div>
     <div style="display:flex;align-items:center;gap:5px;">
       <div style="width:14px;height:14px;background:#D6DCE4;border:1px solid #000;flex-shrink:0;"></div>
-      <span>Mac Mini — 192.168.32.100</span>
+      <span>Mac Mini — 192.168.132.100</span>
     </div>
     <div style="display:flex;align-items:center;gap:5px;">
       <div style="width:14px;height:14px;background:#F2F2F2;border:1px solid #000;flex-shrink:0;"></div>
