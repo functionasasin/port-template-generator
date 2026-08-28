@@ -3,10 +3,54 @@ import { mkdirSync } from 'fs';
 
 // ─── Config ───────────────────────────────────────────────────────────────────
 
-function getSwitchConfig(totalPorts) {
-  if (totalPorts <= 24) return { switches: 1, size: 24 };
-  if (totalPorts <= 48) return { switches: 1, size: 48 };
-  return { switches: 2, size: 48 };
+// Ported verbatim from the venue calculator (functionasasin/kosmas-venue-calculator,
+// src/calculator/network.ts + kisi.ts), which is the authority on sizing. Kept as
+// a literal transcription rather than a tidied rewrite so the two can be diffed.
+// [maxPorts, count24, count48]
+const BANDS = [
+  [24, 1, 0], [48, 0, 1], [72, 1, 1], [96, 0, 2], [120, 1, 2],
+  [144, 0, 3], [168, 1, 3], [192, 0, 4], [216, 1, 4], [240, 0, 5],
+];
+
+const UDM_RJ45_PORTS = 8;
+const MAC_MINI_PORTS = 1;
+const DOORS_PER_CONTROLLER = 4;
+
+/**
+ * calculator kisi.ts: one controller per four doors; readers take UDM-SE PoE
+ * ports first and overflow to the switch. Supersedes this tool's older
+ * "controller + reader #1 on the UDM, rest on the switch" rule, which spec'd a
+ * 48-port switch where the calculator specs a 24.
+ */
+function planKisi(doors, backupInternet) {
+  const readers = doors;
+  const controllers = Math.ceil(readers / DOORS_PER_CONTROLLER);
+  const freeUdmPorts = Math.max(
+    0,
+    UDM_RJ45_PORTS - MAC_MINI_PORTS - controllers - (backupInternet ? 1 : 0),
+  );
+  const readersOnUdm = Math.min(readers, freeUdmPorts);
+  return { controllers, readers, readersOnUdm, readersOnSwitch: readers - readersOnUdm };
+}
+
+/**
+ * The drawing calls buildSwitchPorts once per switch with a single size, so it
+ * can render one switch, or two of the SAME size — nothing else. That leaves
+ * the calculator's 49-72 band (1x24 + 1x48) and everything above 96 ports
+ * undrawable. This is a layout limit of this tool, not a disagreement about
+ * sizing: the numbers are the calculator's either way.
+ */
+function planIsRenderable(plan) {
+  const total = plan.count24 + plan.count48;
+  return total === 1 || (total === 2 && plan.count24 === 0);
+}
+
+/** calculator network.ts: banded, and a 1-court venue gets no switch at all. */
+function planSwitches(courts, ports) {
+  if (courts === 1) return { count24: 0, count48: 0, overCapacity: false };
+  const band = BANDS.find(([max]) => ports <= max);
+  if (!band) return { count24: 0, count48: 0, overCapacity: true };
+  return { count24: band[1], count48: band[2], overCapacity: false };
 }
 
 // ─── Port assignment builders ─────────────────────────────────────────────────
@@ -172,13 +216,26 @@ function buildSwitchHtml(title, columns) {
 
 const AUTO_TIERS = ['auto', 'autonomous', 'autonomous+'];
 
-function buildHtml(tier, courts, cams, doors) {
+function buildHtml(tier, courts, cams, doors, subnet, backupInternet) {
+  // Four consecutive nets, VLAN ID = third octet: management, surveillance,
+  // REPLAY, access control (podplay-ph-lab-flow.md step 24). Only REPLAY
+  // varies per venue, so the operator passes it and the other two derive —
+  // deriving is what stops the three drifting apart, which is how the old
+  // hardcoded .33/.34 got out of step with the .132 REPLAY legend.
+  const replayNet = `192.168.${subnet}`;
+  const surveillanceNet = `192.168.${subnet - 1}`;
+  const accessNet = `192.168.${subnet + 1}`;
   const isAuto = AUTO_TIERS.includes(tier.toLowerCase());
 
-  // Kisi Controller + Reader #1 are on UDM; remaining readers (doors - 1) go on switch
-  const kisiOnSwitch = isAuto ? Math.max(0, doors - 1) : 0;
+  const kisi = isAuto ? planKisi(doors, backupInternet) : { readersOnSwitch: 0 };
+  const kisiOnSwitch = kisi.readersOnSwitch;
   const totalPorts = courts * 3 + cams + kisiOnSwitch;
-  const config = getSwitchConfig(totalPorts);
+  const plan = planSwitches(courts, totalPorts);
+  // Only uniform 1- and 2-switch plans are drawable (see planIsRenderable).
+  const config = {
+    switches: plan.count24 + plan.count48,
+    size: plan.count48 > 0 ? 48 : 24,
+  };
 
   const udmHtml = buildUDMHtml(isAuto);
 
@@ -189,7 +246,8 @@ function buildHtml(tier, courts, cams, doors) {
   // Switch only gets readers #1 onward (UDM has the unnumbered one)
   const kisiGroups = kisiOnSwitch > 0 ? [
     { prefix: 'Kisi Reader', courts: kisiOnSwitch, color: COLORS.kisi,
-      nameFn: n => `Kisi Reader\n#${n}`, ipFn: c => `.${10 + c + 1}` },
+      nameFn: n => `Kisi Reader\n#${n + kisi.readersOnUdm}`,
+      ipFn: c => `.${10 + c + kisi.readersOnUdm}` },
   ] : [];
 
   let switchesHtml = '';
@@ -243,13 +301,13 @@ function buildHtml(tier, courts, cams, doors) {
   const camLegend = cams > 0 ? `
     <div style="display:flex;align-items:center;gap:5px;">
       <div style="width:14px;height:14px;background:#E2D9F3;border:1px solid #000;flex-shrink:0;"></div>
-      <span>UniFi Cam — 192.168.33.(10+N)</span>
+      <span>UniFi Cam — ${surveillanceNet}.(10+N)</span>
     </div>` : '';
 
   const kisiLegend = isAuto ? `
     <div style="display:flex;align-items:center;gap:5px;">
       <div style="width:14px;height:14px;background:#FFF2CC;border:1px solid #000;flex-shrink:0;"></div>
-      <span>Kisi — 192.168.34.10+ (Controller .10, Readers .11+)</span>
+      <span>Kisi — ${accessNet}.10+ (Controller .10, Readers .11+)</span>
     </div>` : '';
 
   return `<!DOCTYPE html>
@@ -332,19 +390,19 @@ function buildHtml(tier, courts, cams, doors) {
   <div style="display:flex;gap:20px;align-items:center;margin-bottom:12px;font-size:8px;flex-wrap:wrap;">
     <div style="display:flex;align-items:center;gap:5px;">
       <div style="width:14px;height:14px;background:#BDD7EE;border:1px solid #000;flex-shrink:0;"></div>
-      <span>iPad — 192.168.132.(20+N)</span>
+      <span>iPad — ${replayNet}.(20+N)</span>
     </div>
     <div style="display:flex;align-items:center;gap:5px;">
       <div style="width:14px;height:14px;background:#E2EFDA;border:1px solid #000;flex-shrink:0;"></div>
-      <span>Camera — 192.168.132.(30+N)</span>
+      <span>Camera — ${replayNet}.(30+N)</span>
     </div>
     <div style="display:flex;align-items:center;gap:5px;">
       <div style="width:14px;height:14px;background:#FCE4D6;border:1px solid #000;flex-shrink:0;"></div>
-      <span>Apple TV — 192.168.132.(40+N)</span>
+      <span>Apple TV — ${replayNet}.(40+N)</span>
     </div>
     <div style="display:flex;align-items:center;gap:5px;">
       <div style="width:14px;height:14px;background:#D6DCE4;border:1px solid #000;flex-shrink:0;"></div>
-      <span>Mac Mini — 192.168.132.100</span>
+      <span>Mac Mini — ${replayNet}.100</span>
     </div>
     ${camLegend}
     ${kisiLegend}
@@ -362,12 +420,13 @@ async function main() {
   const [tierArg, courtsArg] = args;
 
   if (!tierArg || !courtsArg) {
-    console.error('Usage: node port-template.js <tier> <courts> [--cams N] [--doors N]');
+    console.error('Usage: node port-template.js <tier> <courts> --subnet N [--cams N] [--doors N]');
     console.error('  Tiers: pro, auto, autonomous, autonomous+');
-    console.error('Example: node port-template.js pro 8');
-    console.error('Example: node port-template.js pro 8 --cams 4');
-    console.error('Example: node port-template.js auto 8 --doors 3');
-    console.error('Example: node port-template.js autonomous+ 8 --doors 3 --cams 2');
+    console.error('  --subnet N             REPLAY third octet (32 = guide-canonical, 132 = lab)');
+    console.error('  --no-backup-internet   venue has no backup WAN (frees a UDM port for Kisi)');
+    console.error('Example: node port-template.js pro 4 --subnet 32');
+    console.error('Example: node port-template.js pro 8 --subnet 132 --cams 4');
+    console.error('Example: node port-template.js auto 8 --subnet 32 --doors 3');
     process.exit(1);
   }
 
@@ -380,10 +439,29 @@ async function main() {
   }
 
   const courts = parseInt(courtsArg);
-  if (isNaN(courts) || courts < 1 || courts > 18) {
-    console.error('Court count must be between 1 and 18.');
+  // Upper bound is the largest sizing band (240 ports / 3 per court). What this
+  // tool can actually draw is narrower, and the plan checks below say so.
+  if (isNaN(courts) || courts < 1 || courts > 80) {
+    console.error('Court count must be between 1 and 80.');
     process.exit(1);
   }
+
+  const subnetIdx = args.indexOf('--subnet');
+  if (subnetIdx === -1) {
+    console.error('--subnet N is required — N is the REPLAY third octet (e.g. 32 guide-canonical, 132 lab).');
+    console.error('There is deliberately no default: a sheet labelled with the wrong subnet is the failure this flag exists to prevent.');
+    process.exit(1);
+  }
+  const subnet = parseInt(args[subnetIdx + 1]);
+  if (isNaN(subnet) || subnet < 1 || subnet > 254) {
+    console.error('--subnet must be an integer between 1 and 254.');
+    process.exit(1);
+  }
+
+  // calculator VenueInputs.backupInternet — consumes a UDM RJ45 port, so it can
+  // push a Kisi reader onto the switch. The UDM drawing has always shown a
+  // backup WAN, so that stays the default.
+  const backupInternet = !args.includes('--no-backup-internet');
 
   const camsIdx = args.indexOf('--cams');
   let cams = 0;
@@ -409,11 +487,34 @@ async function main() {
     }
   }
 
-  const html = buildHtml(tier, courts, cams, doors);
+  const kisiPlan = isAuto ? planKisi(doors, backupInternet) : { readersOnSwitch: 0 };
+  const ports = courts * 3 + cams + kisiPlan.readersOnSwitch;
+  const plan = planSwitches(courts, ports);
+
+  if (courts === 1) {
+    console.error('A 1-court venue gets no switch — the gateway powers the court directly,');
+    console.error('so there is no switch to make a port template for.');
+    process.exit(1);
+  }
+  if (plan.overCapacity) {
+    console.error(`${ports} ports exceeds the largest sizing band (240). Size this in the venue calculator.`);
+    process.exit(1);
+  }
+  if (!planIsRenderable(plan)) {
+    console.error(`This venue sizes to ${plan.count24}x 24-port + ${plan.count48}x 48-port (${ports} ports).`);
+    console.error('This tool can only draw one switch, or two of the same size.');
+    console.error('The sizing is correct — the template just cannot render it. Use the venue calculator.');
+    process.exit(1);
+  }
+
+  const html = buildHtml(tier, courts, cams, doors, subnet, backupInternet);
   const tierSlug = isAuto ? 'auto' : 'pro';
   const camsSuffix  = cams > 0  ? `-${cams}cams`   : '';
   const doorsSuffix = doors > 0 ? `-${doors}doors`  : '';
-  const pdfFile = `templates/port-template-${tierSlug}-${courts}court${doorsSuffix}${camsSuffix}.pdf`;
+  // Every input that changes the drawing is in the name — otherwise two runs of
+  // the same venue silently overwrite each other.
+  const backupSuffix = backupInternet ? '' : '-nobackup';
+  const pdfFile = `templates/port-template-${tierSlug}-${courts}court${doorsSuffix}${camsSuffix}-net${subnet}${backupSuffix}.pdf`;
 
   mkdirSync('templates', { recursive: true });
 
@@ -429,7 +530,7 @@ async function main() {
   });
   await browser.close();
 
-  console.log(`✓ Generated templates/${pdfFile.split('/').pop()}`);
+  console.log(`✓ Generated templates/${pdfFile.split('/').pop()} — REPLAY 192.168.${subnet}.0/24`);
 }
 
 main();
