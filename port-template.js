@@ -10,7 +10,61 @@ import { mkdirSync } from 'fs';
 const BANDS = [
   [24, 1, 0], [48, 0, 1], [72, 1, 1], [96, 0, 2], [120, 1, 2],
   [144, 0, 3], [168, 1, 3], [192, 0, 4], [216, 1, 4], [240, 0, 5],
+  [264, 1, 5],
 ];
+
+/**
+ * podplay-ph-venue-sizing.md § IP addressing, committed 2026-09-01 as 52da35f
+ * in this repo. That document is the authority; this is a transcription of it,
+ * the same one src/pdf/portPlan.ts carries in the calculator.
+ *
+ * The old 10-wide REPLAY blocks (.20/.30/.40 + N) only hold to 8 courts. At 11
+ * courts iPad C11 and replay camera C1 are both .31; at 14 courts EIGHT
+ * addresses are duplicated. Every sheet this tool produced above 10 courts was
+ * wrong. Venues of 9+ courts use the wide blocks; the iPad block is
+ * deliberately unchanged, so only two of the three move.
+ *
+ * Surveillance and access control DERIVE as N-1 and N+1 of REPLAY. Writing all
+ * three as literals is how they drift apart — which already happened once here,
+ * when hardcoded .33/.34 got out of step with a .132 REPLAY legend.
+ */
+const WIDE_FROM = 9;
+
+function ipFor(kind, n, courts, subnet) {
+  const replay = `192.168.${subnet}`;
+  const surveillance = `192.168.${subnet - 1}`;
+  const access = `192.168.${subnet + 1}`;
+  const wide = courts >= WIDE_FROM;
+  switch (kind) {
+    case 'ipad':       return `${replay}.${20 + n}`;
+    case 'replay':     return `${replay}.${(wide ? 120 : 30) + n}`;
+    case 'appletv':    return `${replay}.${(wide ? 160 : 40) + n}`;
+    case 'macmini':    return `${replay}.100`;
+    case 'security':   return `${surveillance}.${20 + n}`;
+    case 'controller': return `${access}.${10 + n}`;
+    case 'reader':     return `${access}.${20 + n}`;
+    default: throw new Error(`unknown address kind: ${kind}`);
+  }
+}
+
+/** Boxes carry the host octet only; the legend carries the network. */
+const shortIp = ip => `.${ip.split('.')[3]}`;
+
+/**
+ * The camera block runs upward from .21 and the NVR holds .100, so the plan is
+ * defined to 79 cameras.
+ */
+const MAX_SECURITY_CAMERAS = 79;
+
+/**
+ * The wide blocks are 40 apart (replay .120+N, Apple TV .160+N), so they hold
+ * to 40 courts — at 41 replay C41 and Apple TV C1 are both .161, which is the
+ * §3a collision all over again one block up. The doc's table stops at 32
+ * courts, and the two-switch limit below happens to stop there too (96 ports
+ * / 3 per court). This bound is stated rather than left to that coincidence:
+ * if the render limit ever moves, the addressing must be extended first.
+ */
+const MAX_COURTS_ADDRESSED = 32;
 
 const UDM_RJ45_PORTS = 8;
 const MAC_MINI_PORTS = 1;
@@ -34,15 +88,14 @@ function planKisi(doors, backupInternet) {
 }
 
 /**
- * The drawing calls buildSwitchPorts once per switch with a single size, so it
- * can render one switch, or two of the SAME size — nothing else. That leaves
- * the calculator's 49-72 band (1x24 + 1x48) and everything above 96 ports
- * undrawable. This is a layout limit of this tool, not a disagreement about
- * sizing: the numbers are the calculator's either way.
+ * Two switches of any sizes, since the fill is sequential and no longer keys
+ * off a per-switch group list. This used to refuse the calculator's 49-72 band
+ * (1x24 + 1x48) outright — a real venue shape, and the one the calculator
+ * draws. Three or more switches is still a layout limit of this tool, not a
+ * disagreement about sizing: the numbers are the calculator's either way.
  */
 function planIsRenderable(plan) {
-  const total = plan.count24 + plan.count48;
-  return total === 1 || (total === 2 && plan.count24 === 0);
+  return plan.count24 + plan.count48 <= 2;
 }
 
 /** calculator network.ts: banded, and a 1-court venue gets no switch at all. */
@@ -55,23 +108,44 @@ function planSwitches(courts, ports) {
 
 // ─── Port assignment builders ─────────────────────────────────────────────────
 
-function buildUDMPorts(isAuto) {
+/**
+ * Renders the counts planKisi returns. This used to hardcode ONE controller on
+ * port 2 and ONE reader on port 4 for every Autonomous venue whatever its door
+ * count — an 8-court venue with 6 doors and backup internet actually has 2
+ * controllers and 4 readers on the UDM, and the sheet showed two boxes.
+ *
+ * Slot 1 is the Mac mini, then controllers, then the readers that fit, with the
+ * backup WAN on slot 8. planKisi's own arithmetic subtracts the Mac mini, the
+ * controllers and the backup WAN, so the readers it says fit do fit; main()
+ * checks the total separately because `controllers` is uncapped.
+ */
+function buildUDMPorts(kisi, courts, subnet, backupInternet) {
   // Physical UDM-SE layout: 8 LAN ports in 2 rows, then WAN + SFP
   // Top row: ports 1, 3, 5, 7, [gap], 10
   // Bottom row: ports 2, 4, 6, 8, [gap], 9, 11(SFP)
+  const small = t => `<span style="font-size:6.5px;">${t}</span>`;
   const assign = {
-    1: 'Mac Mini\n<span style="font-size:6.5px;">.100</span>',
-    8: 'Backup Internet',
+    1: `Mac Mini\n${small(shortIp(ipFor('macmini', 1, courts, subnet)))}`,
     9: 'Main Internet',
-    11: 'SFP Cable\nTo Switch',
+    11: 'SFP Cable\nTo Switch 1',
   };
   const colors = {};
-  if (isAuto) {
-    assign[2] = 'Kisi\nController';
-    assign[4] = 'Kisi\nReader';
-    colors[2] = COLORS.kisi;
-    colors[4] = COLORS.kisi;
+
+  let slot = 2;
+  for (let n = 1; n <= (kisi.controllers || 0); n++) {
+    // The sources scope the ACCESS CONTROL VLAN instruction to readers, so the
+    // controller carries its address but no VLAN tag.
+    assign[slot] = `Kisi Ctrl\n#${n}\n${small(shortIp(ipFor('controller', n, courts, subnet)))}`;
+    colors[slot] = COLORS.kisi;
+    slot++;
   }
+  for (let n = 1; n <= (kisi.readersOnUdm || 0); n++) {
+    assign[slot] = `Kisi Reader\n#${n}\n${small(shortIp(ipFor('reader', n, courts, subnet)))}`;
+    colors[slot] = COLORS.kisi;
+    slot++;
+  }
+  if (backupInternet) assign[8] = 'Backup Internet';
+
   return {
     topPorts:    [1, 3, 5, 7, null, 10],
     bottomPorts: [2, 4, 6, 8, null, 9, 11],
@@ -80,59 +154,78 @@ function buildUDMPorts(isAuto) {
   };
 }
 
-function buildSwitchPorts(groups, switchSize) {
-  // groups: [{ label, prefix, courts }]
-  // Returns array of port-pair columns; gaps are empty numbered port pairs; SFP is a fixed port at switchSize+1
+/**
+ * Every device the switches must carry, in fixed order. One flat list, filled
+ * sequentially and spilling onto the next switch — NOT a per-switch group list.
+ *
+ * The group form laid out every device it was handed and only afterwards padded
+ * up to switchSize, with no capacity check at all: at 25 courts it put 50
+ * devices on a 48-port panel, numbered past port 48, and the SFP box (hardcoded
+ * at switchSize+1) collided with ports 49 and 50. A group may now split across
+ * two switches; every box is labelled, so the sheet stays unambiguous.
+ */
+function devicesFor(courts, cams, kisi, subnet) {
+  const out = [];
+  const dev = (label, ip, color) => out.push({ label, ip: shortIp(ip), color });
+  for (let n = 1; n <= courts; n++) dev(`iPad\nC${n}`, ipFor('ipad', n, courts, subnet), COLORS.ipad);
+  for (let n = 1; n <= courts; n++) dev(`Replay Cam\nC${n}`, ipFor('replay', n, courts, subnet), COLORS.camera);
+  for (let n = 1; n <= courts; n++) dev(`Apple TV\nC${n}`, ipFor('appletv', n, courts, subnet), COLORS.appletv);
+  for (let n = 1; n <= cams; n++) dev(`UniFi Cam\n#${n}`, ipFor('security', n, courts, subnet), COLORS.securitycam);
+  // Readers are numbered across the WHOLE venue: the ones on the UDM took the
+  // first readersOnUdm numbers, so these continue rather than restart.
+  for (let i = 1; i <= (kisi.readersOnSwitch || 0); i++) {
+    const n = kisi.readersOnUdm + i;
+    dev(`Kisi Reader\n#${n}`, ipFor('reader', n, courts, subnet), COLORS.kisi);
+  }
+  return out;
+}
+
+/**
+ * One switch's columns, consuming from `devices` starting at `from`. Returns
+ * the columns and the index the next switch resumes at, so nothing is drawn
+ * twice and nothing is dropped.
+ *
+ * `uplink` differs per switch: a UDM has ONE 10G SFP+ LAN socket (Ubiquiti's
+ * tech specs, not any Kosmas document), so switch 2 daisy-chains off switch 1.
+ * This used to be hardcoded 'to UDM' and drawn once per switch, showing two
+ * DACs into a gateway with one socket for them.
+ */
+function buildSwitchPorts(devices, from, switchSize, uplink) {
   const columns = [];
-  let portNum = 1;
+  const box = d => `${d.label}\n<span style="font-size:6.5px;">${d.ip}</span>`;
+  let i = from;
 
-  groups.forEach((group, gi) => {
-    const pairs = Math.ceil(group.courts / 2);
-    for (let p = 0; p < pairs; p++) {
-      const c1 = p * 2 + 1;
-      const c2 = p * 2 + 2;
-      const labelFn = group.nameFn
-        ? (n) => `${group.nameFn(n)}\n<span style="font-size:6.5px;">${group.ipFn(n)}</span>`
-        : (n) => `${group.prefix}\nC${n}\n<span style="font-size:6.5px;">${group.ipFn(n)}</span>`;
-      columns.push({
-        type: 'port',
-        topPort:      portNum,
-        topDevice:    labelFn(c1),
-        bottomPort:   portNum + 1,
-        bottomDevice: c2 <= group.courts ? labelFn(c2) : '',
-        color:        group.color,
-      });
-      portNum += 2;
-    }
-  });
-
-  // Fill remaining empty ports up to switchSize
-  while (portNum <= switchSize) {
+  for (let portNum = 1; portNum <= switchSize; portNum += 2) {
+    const top = devices[i];
+    if (top) i++;
+    const bottom = devices[i];
+    if (bottom) i++;
     columns.push({
       type:         'port',
       topPort:      portNum,
-      topDevice:    '',
+      topDevice:    top ? box(top) : '',
+      topColor:     top ? top.color : COLORS.empty,
       bottomPort:   portNum + 1,
-      bottomDevice: '',
-      color:        COLORS.empty,
+      bottomDevice: bottom ? box(bottom) : '',
+      bottomColor:  bottom ? bottom.color : COLORS.empty,
     });
-    portNum += 2;
   }
 
-  // SFP at fixed port number (switchSize + 1, e.g. port 25 on a 24-port switch)
-  const sfpPort = switchSize + 1;
+  // Beyond the numbered face, so it cannot collide with a port the way the
+  // old fixed switchSize+1 slot did once the panel overflowed.
   columns.push({
     type:         'port',
-    topPort:      sfpPort,
-    topDevice:    'SFP Cable\nto UDM',
-    bottomPort:   sfpPort + 1,
+    topPort:      null,
+    topDevice:    uplink,
+    topColor:     COLORS.sfp,
+    bottomPort:   null,
     bottomDevice: '',
-    color:        COLORS.sfp,
+    bottomColor:  COLORS.empty,
     gapBefore:    true,
     isSfp:        true,
   });
 
-  return columns;
+  return { columns, next: i };
 }
 
 // ─── Device colors ────────────────────────────────────────────────────────────
@@ -161,8 +254,9 @@ function portNum(num) {
   return `<div class="port-num">Port ${num}</div>`;
 }
 
-function buildUDMHtml(isAuto) {
-  const { topPorts, bottomPorts, assign, colors } = buildUDMPorts(isAuto);
+function buildUDMHtml(kisi, courts, subnet, backupInternet) {
+  const { topPorts, bottomPorts, assign, colors } =
+    buildUDMPorts(kisi, courts, subnet, backupInternet);
 
   const topNums  = topPorts.map(p => portNum(p)).join('');
   const topBoxes = topPorts.map(p => {
@@ -195,9 +289,11 @@ function buildUDMHtml(isAuto) {
 function buildSwitchHtml(title, columns) {
   const gapDiv = `<div class="port-gap"></div>`;
   const sfpLabel = `<div class="port-num">SFP/Uplink</div>`;
+  // Per-BOX colour, not per column: the fill is sequential now, so one column
+  // can straddle two device kinds (the last iPad above the first replay cam).
   const topNums  = columns.map(col => col.type === 'gap' ? gapDiv : (col.gapBefore ? gapDiv : '') + (col.isSfp ? sfpLabel : portNum(col.topPort))).join('');
-  const topBoxes = columns.map(col => col.type === 'gap' ? gapDiv : (col.gapBefore ? gapDiv : '') + portBox(col.topDevice || '', col.color)).join('');
-  const botBoxes = columns.map(col => col.type === 'gap' ? gapDiv : (col.gapBefore ? gapDiv : '') + portBox(col.bottomDevice || '', col.bottomDevice ? col.color : COLORS.empty)).join('');
+  const topBoxes = columns.map(col => col.type === 'gap' ? gapDiv : (col.gapBefore ? gapDiv : '') + portBox(col.topDevice || '', col.topColor)).join('');
+  const botBoxes = columns.map(col => col.type === 'gap' ? gapDiv : (col.gapBefore ? gapDiv : '') + portBox(col.bottomDevice || '', col.bottomColor)).join('');
   const botNums  = columns.map(col => col.type === 'gap' ? gapDiv : (col.gapBefore ? gapDiv : '') + (col.isSfp ? `<div class="port-num-empty"></div>` : portNum(col.bottomPort))).join('');
 
   return `
@@ -231,68 +327,38 @@ function buildHtml(tier, courts, cams, doors, subnet, backupInternet) {
   const kisiOnSwitch = kisi.readersOnSwitch;
   const totalPorts = courts * 3 + cams + kisiOnSwitch;
   const plan = planSwitches(courts, totalPorts);
-  // Only uniform 1- and 2-switch plans are drawable (see planIsRenderable).
-  const config = {
-    switches: plan.count24 + plan.count48,
-    size: plan.count48 > 0 ? 48 : 24,
-  };
+  const udmHtml = buildUDMHtml(kisi, courts, subnet, backupInternet);
 
-  const udmHtml = buildUDMHtml(isAuto);
+  // Larger switch first, filled first, drawn topmost and titled Switch 1 —
+  // rack order and fill order are the same order, as in the calculator.
+  const sizes = [
+    ...Array(plan.count48).fill(48),
+    ...Array(plan.count24).fill(24),
+  ];
+  const devices = devicesFor(courts, cams, kisi, subnet);
 
-  const camGroup = cams > 0
-    ? [{ prefix: 'UniFi Cam', courts: cams, color: COLORS.securitycam, ipFn: c => `.${10 + c}` }]
-    : [];
+  // Titles name the SIZE only. They used to name the contents ("Switch 1
+  // (48-port) — iPads + Cameras") and were hardcoded to 48 whatever the plan
+  // said; with a sequential fill a group can straddle both switches, so a
+  // contents title would be wrong as often as it was right.
+  let next = 0;
+  const switchPanels = sizes.map((size, i) => {
+    const uplink = i === 0 ? 'SFP Cable\nto UDM' : 'SFP Cable\nto Switch 1';
+    const built = buildSwitchPorts(devices, next, size, uplink);
+    next = built.next;
+    return buildSwitchHtml(
+      `Switch ${i + 1} (${size}-port)`, built.columns,
+    );
+  });
 
-  // Switch only gets readers #1 onward (UDM has the unnumbered one)
-  const kisiGroups = kisiOnSwitch > 0 ? [
-    { prefix: 'Kisi Reader', courts: kisiOnSwitch, color: COLORS.kisi,
-      nameFn: n => `Kisi Reader\n#${n + kisi.readersOnUdm}`,
-      ipFn: c => `.${10 + c + kisi.readersOnUdm}` },
-  ] : [];
-
-  let switchesHtml = '';
-
-  if (config.switches === 1) {
-    const cols = buildSwitchPorts([
-      { prefix: 'iPad',       courts, color: COLORS.ipad,    ipFn: c => `.${20 + c}` },
-      { prefix: 'Replay Cam', courts, color: COLORS.camera,  ipFn: c => `.${30 + c}` },
-      { prefix: 'Apple TV',   courts, color: COLORS.appletv, ipFn: c => `.${40 + c}` },
-      ...camGroup,
-      ...kisiGroups,
-    ], config.size);
-
-    switchesHtml = `
+  const switchesHtml = `
       <div class="row">
         ${udmHtml}
-        ${buildSwitchHtml(`${config.size} Port Switch`, cols)}
-      </div>`;
-
-  } else {
-    const sw1Cols = buildSwitchPorts([
-      { prefix: 'iPad',       courts, color: COLORS.ipad,   ipFn: c => `.${20 + c}` },
-      { prefix: 'Replay Cam', courts, color: COLORS.camera, ipFn: c => `.${30 + c}` },
-    ], config.size);
-
-    const sw2ExtraLabel = [
-      cams > 0 ? 'Security Cams' : null,
-      isAuto    ? 'Kisi'         : null,
-    ].filter(Boolean).join(' + ');
-
-    const sw2Cols = buildSwitchPorts([
-      { prefix: 'Apple TV', courts, color: COLORS.appletv, ipFn: c => `.${40 + c}` },
-      ...camGroup,
-      ...kisiGroups,
-    ], config.size);
-
-    switchesHtml = `
-      <div class="row">
-        ${udmHtml}
-        ${buildSwitchHtml('Switch 1 (48-port) — iPads + Cameras', sw1Cols)}
-      </div>
+        ${switchPanels[0] ?? ''}
+      </div>${switchPanels.slice(1).map(html => `
       <div class="row" style="margin-top:24px;">
-        ${buildSwitchHtml(`Switch 2 (48-port) — Apple TVs${sw2ExtraLabel ? ` + ${sw2ExtraLabel}` : ''}`, sw2Cols)}
-      </div>`;
-  }
+        ${html}
+      </div>`).join('')}`;
 
   const tierLabel = isAuto ? 'Auto' : 'Pro';
   const doorsLabel = isAuto ? ` | ${doors} Doors` : '';
@@ -301,13 +367,13 @@ function buildHtml(tier, courts, cams, doors, subnet, backupInternet) {
   const camLegend = cams > 0 ? `
     <div style="display:flex;align-items:center;gap:5px;">
       <div style="width:14px;height:14px;background:#E2D9F3;border:1px solid #000;flex-shrink:0;"></div>
-      <span>UniFi Cam — ${surveillanceNet}.(10+N)</span>
+      <span>UniFi Cam — ${surveillanceNet}.(20+N)</span>
     </div>` : '';
 
   const kisiLegend = isAuto ? `
     <div style="display:flex;align-items:center;gap:5px;">
       <div style="width:14px;height:14px;background:#FFF2CC;border:1px solid #000;flex-shrink:0;"></div>
-      <span>Kisi — ${accessNet}.10+ (Controller .10, Readers .11+)</span>
+      <span>Kisi — ${accessNet}: controllers .(10+N), readers .(20+N)</span>
     </div>` : '';
 
   return `<!DOCTYPE html>
@@ -394,11 +460,11 @@ function buildHtml(tier, courts, cams, doors, subnet, backupInternet) {
     </div>
     <div style="display:flex;align-items:center;gap:5px;">
       <div style="width:14px;height:14px;background:#E2EFDA;border:1px solid #000;flex-shrink:0;"></div>
-      <span>Camera — ${replayNet}.(30+N)</span>
+      <span>Replay Camera — ${replayNet}.(${courts >= WIDE_FROM ? 120 : 30}+N)</span>
     </div>
     <div style="display:flex;align-items:center;gap:5px;">
       <div style="width:14px;height:14px;background:#FCE4D6;border:1px solid #000;flex-shrink:0;"></div>
-      <span>Apple TV — ${replayNet}.(40+N)</span>
+      <span>Apple TV — ${replayNet}.(${courts >= WIDE_FROM ? 160 : 40}+N)</span>
     </div>
     <div style="display:flex;align-items:center;gap:5px;">
       <div style="width:14px;height:14px;background:#D6DCE4;border:1px solid #000;flex-shrink:0;"></div>
@@ -408,6 +474,10 @@ function buildHtml(tier, courts, cams, doors, subnet, backupInternet) {
     ${kisiLegend}
     <span style="color:#555;">N = court/device number</span>
   </div>
+  ${courts >= WIDE_FROM ? `<div style="font-size:8px;color:#555;margin-bottom:12px;">
+    Replay camera and Apple TV addresses use the 9+ court plan. A venue previously
+    configured at 8 courts or fewer must be re-addressed. Verify before labelling.
+  </div>` : ''}
   ${switchesHtml}
 </body>
 </html>`;
@@ -500,9 +570,29 @@ async function main() {
     console.error(`${ports} ports exceeds the largest sizing band (240). Size this in the venue calculator.`);
     process.exit(1);
   }
+  if (courts > MAX_COURTS_ADDRESSED) {
+    console.error(`The addressing plan is defined to ${MAX_COURTS_ADDRESSED} courts; above that the`);
+    console.error('replay and Apple TV blocks collide. Extend podplay-ph-venue-sizing.md first.');
+    process.exit(1);
+  }
+  // controllers = ceil(doors/4) is uncapped, so the UDM's 8 RJ45 ports can be
+  // oversubscribed before any of the switch checks fire. Drawing a 9th box on
+  // an 8-port device is the failure this prevents.
+  const udmDemand = 1 + (kisiPlan.controllers || 0) + (kisiPlan.readersOnUdm || 0)
+    + (backupInternet ? 1 : 0);
+  if (udmDemand > UDM_RJ45_PORTS) {
+    console.error(`This venue needs ${udmDemand} UDM ports and the UDM has ${UDM_RJ45_PORTS}.`);
+    console.error('The sizing is correct — the template cannot draw it. Use the venue calculator.');
+    process.exit(1);
+  }
+  if (cams > MAX_SECURITY_CAMERAS) {
+    console.error(`${cams} security cameras exceeds the addressing plan, whose camera block`);
+    console.error(`ends below the NVR reservation at .100. The plan is defined to ${MAX_SECURITY_CAMERAS}.`);
+    process.exit(1);
+  }
   if (!planIsRenderable(plan)) {
     console.error(`This venue sizes to ${plan.count24}x 24-port + ${plan.count48}x 48-port (${ports} ports).`);
-    console.error('This tool can only draw one switch, or two of the same size.');
+    console.error('This tool can only draw one or two switches.');
     console.error('The sizing is correct — the template just cannot render it. Use the venue calculator.');
     process.exit(1);
   }

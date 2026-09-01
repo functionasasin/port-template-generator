@@ -83,10 +83,39 @@ Bands are the calculator's:
 | 1 court | no switch (gateway powers the court) | — |
 | ≤ 24 | 1x 24-port | ✅ |
 | ≤ 48 | 1x 48-port | ✅ |
-| ≤ 72 | 1x 24-port + 1x 48-port | ❌ |
+| ≤ 72 | 1x 24-port + 1x 48-port | ✅ |
 | ≤ 96 | 2x 48-port | ✅ |
-| ≤ 240 | 3-6 switches | ❌ |
+| ≤ 264 | 3-6 switches | ❌ |
 
-The drawing renders one switch, or two of the **same** size. Venues that size to
-a mixed pair or to three or more switches exit with an explanation — the sizing
-is still correct, this tool just cannot draw it. Size those in the calculator.
+The drawing renders one or two switches, of any sizes — the fill is sequential
+across them, so the mixed pair is drawn like any other. Venues that size to
+three or more switches exit with an explanation: the sizing is still correct,
+this tool just cannot draw it. Size those in the calculator.
+
+Ports fill in device order — iPads, replay cameras, Apple TVs, security cameras,
+then the Kisi readers that overflowed the UDM — and spill onto the second switch
+when the first is full. A group may therefore straddle both switches; every box
+is labelled, so the sheet stays unambiguous. Switch 1 uplinks to the UDM and
+switch 2 daisy-chains off switch 1, because the gateway has one SFP+ LAN socket.
+
+## Addressing
+
+Transcribed from `podplay-ph-venue-sizing.md` § IP addressing, which is the
+authority. `--subnet` sets the REPLAY third octet; surveillance derives as N-1
+and access control as N+1.
+
+| Device | ≤ 8 courts | 9+ courts |
+|---|---|---|
+| iPad C*N* | `.20 + N` | `.20 + N` (unchanged) |
+| Replay camera C*N* | `.30 + N` | `.120 + N` |
+| Apple TV C*N* | `.40 + N` | `.160 + N` |
+| Mac mini | `.100` | `.100` |
+| Security camera *N* | surveillance `.20 + N` | same |
+| Kisi controller *N* | access `.10 + N` | same |
+| Kisi reader *N* | access `.20 + N` | same |
+
+**Crossing 8 courts re-addresses a venue** — the 10-wide blocks collide above 10
+courts, so 9+ uses the wide blocks and the sheet says so. Readers are numbered
+across the whole venue: the ones on the UDM and the ones on the switch are one
+sequence. The plan is defined to 32 courts and 79 security cameras; past either,
+the tool exits rather than printing an address it cannot stand behind.
